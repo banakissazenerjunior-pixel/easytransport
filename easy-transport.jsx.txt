@@ -1,0 +1,1119 @@
+import React, { useState, useMemo } from "react";
+import {
+  MapPin,
+  User,
+  Phone,
+  Calendar,
+  Users,
+  Smartphone,
+  ArrowRight,
+  ArrowLeft,
+  CheckCircle2,
+  Lock,
+  LayoutDashboard,
+  Ticket,
+  Search,
+  TrendingUp,
+  Bus,
+  Navigation,
+  ShieldCheck,
+  X,
+  Clock,
+  Armchair,
+  SearchCheck,
+} from "lucide-react";
+
+/* ------------------------------------------------------------------ */
+/* Données & utilitaires                                              */
+/* ------------------------------------------------------------------ */
+
+const VILLES_GABON = [
+  { nom: "Libreville", lat: 0.4162, lng: 9.4673 },
+  { nom: "Port-Gentil", lat: -0.7193, lng: 8.7815 },
+  { nom: "Franceville", lat: -1.6333, lng: 13.5833 },
+  { nom: "Oyem", lat: 1.5993, lng: 11.5793 },
+  { nom: "Moanda", lat: -1.5667, lng: 13.2 },
+  { nom: "Lambaréné", lat: -0.7, lng: 10.2333 },
+  { nom: "Mouila", lat: -1.8667, lng: 11.05 },
+  { nom: "Tchibanga", lat: -2.85, lng: 11.0167 },
+  { nom: "Koulamoutou", lat: -1.1333, lng: 12.4833 },
+  { nom: "Makokou", lat: 0.5667, lng: 12.8667 },
+];
+
+const TARIF_BASE_KM = 45; // FCFA / km approx.
+
+function distanceKm(a, b) {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) *
+      Math.cos((b.lat * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
+function villeLaPlusProche(lat, lng) {
+  let meilleure = VILLES_GABON[0];
+  let meilleureDist = Infinity;
+  for (const v of VILLES_GABON) {
+    const d = distanceKm({ lat, lng }, v);
+    if (d < meilleureDist) {
+      meilleureDist = d;
+      meilleure = v;
+    }
+  }
+  return meilleure;
+}
+
+function genererCodeReservation() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return `ET-${code}`;
+}
+
+function prixEstime(villeA, villeB, passagers) {
+  const va = VILLES_GABON.find((v) => v.nom === villeA);
+  const vb = VILLES_GABON.find((v) => v.nom === villeB);
+  if (!va || !vb) return 5000 * passagers;
+  const km = Math.max(distanceKm(va, vb), 15);
+  const prix = Math.round((km * TARIF_BASE_KM) / 500) * 500;
+  return Math.max(prix, 2500) * passagers;
+}
+
+function formatFCFA(n) {
+  return n.toLocaleString("fr-FR").replace(/,/g, " ") + " FCFA";
+}
+
+const COMPAGNIES = [
+  { nom: "SOVOG Transport", couleur: "#0E3B2E" },
+  { nom: "Gabon Voyages", couleur: "#B54834" },
+  { nom: "TransEquateur", couleur: "#1C5C43" },
+];
+
+function ajouterJours(dateStr, n) {
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
+function formatDateCourt(dateStr) {
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "short" });
+}
+
+// Génère une liste de départs disponibles (simulée) pour un trajet et une date donnés.
+// Déterministe (basé sur la date + les villes) pour que les résultats restent stables.
+function genererDeparts(depart, destination, dateStr, passagers) {
+  const graine = (depart + destination + dateStr).split("").reduce((s, c) => s + c.charCodeAt(0), 0);
+  const prixBase = prixEstime(depart, destination, 1);
+  const horaires = ["05:30", "07:00", "09:15", "12:00", "14:30", "17:00"];
+  const nbDeparts = 2 + (graine % 3); // 2 à 4 départs ce jour-là
+
+  const departs = [];
+  for (let i = 0; i < nbDeparts; i++) {
+    const idxCompagnie = (graine + i * 7) % COMPAGNIES.length;
+    const idxHoraire = (graine + i * 3) % horaires.length;
+    const placesRestantes = ((graine + i * 11) % 18) + 2; // entre 2 et 19
+    const variation = 1 + (((graine + i) % 5) - 2) * 0.04; // légère variation de prix
+    departs.push({
+      id: `${dateStr}-${i}`,
+      compagnie: COMPAGNIES[idxCompagnie].nom,
+      couleur: COMPAGNIES[idxCompagnie].couleur,
+      heure: horaires[idxHoraire],
+      placesRestantes,
+      prix: Math.round((prixBase * variation) / 500) * 500,
+      complet: placesRestantes < passagers,
+    });
+  }
+  return departs.sort((a, b) => a.heure.localeCompare(b.heure));
+}
+
+/* ------------------------------------------------------------------ */
+/* Petits composants d'UI partagés                                    */
+/* ------------------------------------------------------------------ */
+
+function Champ({ icone: Icone, label, children }) {
+  return (
+    <label className="block">
+      <span className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-forest/60 font-semibold mb-2">
+        <Icone size={13} strokeWidth={2.5} />
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+const inputCls =
+  "w-full rounded-xl border-2 border-forest/15 bg-white px-4 py-3 text-[15px] text-ink placeholder:text-ink/35 outline-none transition focus:border-gold focus:ring-4 focus:ring-gold/15";
+
+function LigneTrajet({ depart, arrivee, detectee }) {
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <div className="flex flex-col items-center">
+        <span className="h-3 w-3 rounded-full bg-forest shrink-0" />
+        <span className="w-px flex-1 border-l-2 border-dashed border-forest/30 my-1 h-6" />
+        <span className="h-3 w-3 rounded-full bg-gold shrink-0" />
+      </div>
+      <div className="flex flex-col justify-between h-[52px] py-0.5 min-w-0">
+        <div className="leading-tight">
+          <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold">
+            {detectee ? "Position détectée" : "Départ"}
+          </p>
+          <p className="text-[15px] font-bold text-ink truncate">{depart || "—"}</p>
+        </div>
+        <div className="leading-tight">
+          <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold">Arrivée</p>
+          <p className="text-[15px] font-bold text-ink truncate">{arrivee || "—"}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran 0 — Sélecteur de rôle                                        */
+/* ------------------------------------------------------------------ */
+
+function EcranAccueil({ onChoix }) {
+  return (
+    <div className="min-h-[100dvh] bg-forest flex flex-col text-paper relative overflow-hidden">
+      <div
+        className="absolute inset-0 opacity-[0.07] pointer-events-none"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(115deg, transparent 0 22px, #F1ECDF 22px 23px)",
+        }}
+      />
+      <div className="relative flex-1 flex flex-col justify-between px-6 pt-14 pb-10 max-w-md mx-auto w-full">
+        <div>
+          <div className="flex items-center gap-2.5 mb-1">
+            <div className="h-9 w-9 rounded-lg bg-gold flex items-center justify-center rotate-3">
+              <Bus size={19} className="text-forest" strokeWidth={2.5} />
+            </div>
+            <span className="font-display text-[15px] tracking-[0.2em] uppercase text-gold/90 font-semibold">
+              Easy Transport
+            </span>
+          </div>
+          <h1 className="font-display text-[34px] leading-[1.08] font-bold mt-8 text-paper">
+            Le Gabon,
+            <br />
+            <span className="text-gold">de gare en gare.</span>
+          </h1>
+          <p className="text-paper/60 text-[15px] mt-4 leading-relaxed max-w-xs">
+            Réservez votre billet en quelques secondes, où que vous soyez au pays.
+          </p>
+        </div>
+
+        <div className="mt-10 space-y-3">
+          <p className="text-[11px] uppercase tracking-[0.16em] text-paper/45 font-semibold mb-3">
+            Vous êtes ?
+          </p>
+
+          <button
+            onClick={() => onChoix("client")}
+            className="w-full group bg-gold text-forest rounded-2xl px-5 py-5 flex items-center justify-between text-left transition active:scale-[0.98] shadow-[0_8px_24px_-8px_rgba(232,163,61,0.5)]"
+          >
+            <span className="flex items-center gap-3.5">
+              <span className="h-11 w-11 rounded-xl bg-forest/10 flex items-center justify-center">
+                <User size={20} strokeWidth={2.5} />
+              </span>
+              <span>
+                <span className="block font-display font-bold text-[17px]">Voyageur</span>
+                <span className="block text-[13px] text-forest/70">Réserver un billet</span>
+              </span>
+            </span>
+            <ArrowRight size={20} className="transition group-active:translate-x-1" />
+          </button>
+
+          <button
+            onClick={() => onChoix("admin")}
+            className="w-full group bg-paper/[0.06] border-2 border-paper/15 text-paper rounded-2xl px-5 py-5 flex items-center justify-between text-left transition active:scale-[0.98] hover:bg-paper/[0.1]"
+          >
+            <span className="flex items-center gap-3.5">
+              <span className="h-11 w-11 rounded-xl bg-paper/10 flex items-center justify-center">
+                <ShieldCheck size={20} strokeWidth={2.5} />
+              </span>
+              <span>
+                <span className="block font-display font-bold text-[17px]">Transporteur</span>
+                <span className="block text-[13px] text-paper/50">Accès administrateur</span>
+              </span>
+            </span>
+            <ArrowRight size={20} className="transition group-active:translate-x-1" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Client — Formulaire de réservation                           */
+/* ------------------------------------------------------------------ */
+
+function EntetePage({ titre, sousTitre, onRetour }) {
+  return (
+    <div className="flex items-center gap-3 px-5 pt-6 pb-4">
+      <button
+        onClick={onRetour}
+        className="h-9 w-9 rounded-full bg-forest/8 flex items-center justify-center shrink-0 active:scale-90 transition"
+      >
+        <ArrowLeft size={16} className="text-forest" strokeWidth={2.5} />
+      </button>
+      <div className="min-w-0">
+        <h1 className="font-display font-bold text-[19px] text-ink leading-tight truncate">{titre}</h1>
+        {sousTitre && <p className="text-[12.5px] text-ink/45 leading-tight">{sousTitre}</p>}
+      </div>
+    </div>
+  );
+}
+
+function FormulaireReservation({ onRetour, onSuivant }) {
+  const [geoStatut, setGeoStatut] = useState("idle"); // idle | recherche | ok | refuse
+  const [depart, setDepart] = useState(null);
+
+  const [nom, setNom] = useState("");
+  const [telephone, setTelephone] = useState("");
+  const [destination, setDestination] = useState("");
+  const [date, setDate] = useState("");
+  const [passagers, setPassagers] = useState(1);
+
+  function detecterPosition() {
+    setGeoStatut("recherche");
+    if (!navigator.geolocation) {
+      setGeoStatut("refuse");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const ville = villeLaPlusProche(pos.coords.latitude, pos.coords.longitude);
+        setDepart(ville.nom);
+        setGeoStatut("ok");
+      },
+      () => setGeoStatut("refuse"),
+      { timeout: 8000 }
+    );
+  }
+
+  const villesArrivee = VILLES_GABON.filter((v) => v.nom !== depart);
+  const pretAValider = depart && nom.trim() && telephone.trim() && destination && date && passagers > 0;
+
+  return (
+    <div className="min-h-[100dvh] bg-mist">
+      <EntetePage titre="Réserver un billet" sousTitre="Étape 1 sur 3 — Vos informations" onRetour={onRetour} />
+
+      <div className="px-5 pb-32 max-w-md mx-auto space-y-5">
+        {/* Bloc géolocalisation */}
+        <div className="bg-forest rounded-2xl p-4 text-paper">
+          {geoStatut === "idle" && (
+            <button
+              onClick={detecterPosition}
+              className="w-full flex items-center justify-between gap-3"
+            >
+              <span className="flex items-center gap-3 text-left">
+                <span className="h-10 w-10 rounded-full bg-paper/10 flex items-center justify-center shrink-0">
+                  <Navigation size={17} />
+                </span>
+                <span>
+                  <span className="block font-semibold text-[14.5px]">Détecter mon départ</span>
+                  <span className="block text-[12.5px] text-paper/55">
+                    Via la position de votre téléphone
+                  </span>
+                </span>
+              </span>
+              <ArrowRight size={17} className="text-gold shrink-0" />
+            </button>
+          )}
+          {geoStatut === "recherche" && (
+            <div className="flex items-center gap-3">
+              <span className="h-10 w-10 rounded-full bg-paper/10 flex items-center justify-center shrink-0">
+                <Navigation size={17} className="animate-pulse" />
+              </span>
+              <span className="text-[14px] text-paper/75">Localisation en cours…</span>
+            </div>
+          )}
+          {geoStatut === "ok" && (
+            <div className="flex items-center gap-3">
+              <span className="h-10 w-10 rounded-full bg-gold/20 flex items-center justify-center shrink-0">
+                <CheckCircle2 size={18} className="text-gold" />
+              </span>
+              <span>
+                <span className="block text-[12px] text-paper/50 uppercase tracking-wider font-semibold">
+                  Ville de départ détectée
+                </span>
+                <span className="block font-display font-bold text-[16px]">{depart}</span>
+              </span>
+            </div>
+          )}
+          {geoStatut === "refuse" && (
+            <div>
+              <p className="text-[13.5px] text-paper/70 mb-2.5">
+                Localisation indisponible. Choisissez votre ville de départ manuellement.
+              </p>
+              <select
+                value={depart || ""}
+                onChange={(e) => {
+                  setDepart(e.target.value);
+                  setGeoStatut("ok");
+                }}
+                className="w-full rounded-lg bg-paper/10 border-2 border-paper/20 px-3 py-2.5 text-[14px] text-paper outline-none focus:border-gold"
+              >
+                <option value="" className="text-ink">
+                  Sélectionner une ville…
+                </option>
+                {VILLES_GABON.map((v) => (
+                  <option key={v.nom} value={v.nom} className="text-ink">
+                    {v.nom}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        <Champ icone={User} label="Nom et prénom">
+          <input
+            className={inputCls}
+            placeholder="Ex. Banakissa Ndong"
+            value={nom}
+            onChange={(e) => setNom(e.target.value)}
+          />
+        </Champ>
+
+        <Champ icone={Phone} label="Numéro de téléphone">
+          <input
+            className={inputCls}
+            placeholder="074 XX XX XX"
+            inputMode="tel"
+            value={telephone}
+            onChange={(e) => setTelephone(e.target.value)}
+          />
+        </Champ>
+
+        <Champ icone={MapPin} label="Ville d'arrivée">
+          <select
+            className={inputCls + " appearance-none"}
+            value={destination}
+            onChange={(e) => setDestination(e.target.value)}
+            disabled={!depart}
+          >
+            <option value="">{depart ? "Choisir la destination…" : "Détectez d'abord votre départ"}</option>
+            {villesArrivee.map((v) => (
+              <option key={v.nom} value={v.nom}>
+                {v.nom}
+              </option>
+            ))}
+          </select>
+        </Champ>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Champ icone={Calendar} label="Date du voyage">
+            <input
+              type="date"
+              className={inputCls}
+              min={new Date().toISOString().split("T")[0]}
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </Champ>
+          <Champ icone={Users} label="Passagers">
+            <div className="flex items-center rounded-xl border-2 border-forest/15 bg-white px-2 py-1.5">
+              <button
+                onClick={() => setPassagers((p) => Math.max(1, p - 1))}
+                className="h-8 w-8 rounded-lg text-forest font-bold text-lg active:bg-forest/10"
+              >
+                −
+              </button>
+              <span className="flex-1 text-center font-semibold text-[15px]">{passagers}</span>
+              <button
+                onClick={() => setPassagers((p) => Math.min(9, p + 1))}
+                className="h-8 w-8 rounded-lg text-forest font-bold text-lg active:bg-forest/10"
+              >
+                +
+              </button>
+            </div>
+          </Champ>
+        </div>
+
+        {depart && destination && (
+          <div className="bg-white rounded-2xl p-4 border-2 border-forest/10">
+            <LigneTrajet depart={depart} arrivee={destination} detectee={geoStatut === "ok"} />
+          </div>
+        )}
+      </div>
+
+      <div className="fixed bottom-0 left-0 right-0 bg-mist/95 backdrop-blur border-t border-forest/10 px-5 py-4">
+        <div className="max-w-md mx-auto">
+          <button
+            disabled={!pretAValider}
+            onClick={() =>
+              onSuivant({ nom, telephone, depart, destination, date, passagers })
+            }
+            className="w-full bg-forest disabled:bg-forest/25 text-paper disabled:text-paper/50 font-display font-bold rounded-xl py-4 flex items-center justify-center gap-2 transition active:scale-[0.98]"
+          >
+            Continuer vers le paiement
+            <ArrowRight size={17} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Client — Disponibilités (recherche de véhicule)              */
+/* ------------------------------------------------------------------ */
+
+function EcranResultats({ reservation, onRetour, onChoisir }) {
+  const [chargement, setChargement] = useState(true);
+  const [dateActive, setDateActive] = useState(reservation.date);
+
+  const dates = useMemo(
+    () => [
+      ajouterJours(reservation.date, -1),
+      reservation.date,
+      ajouterJours(reservation.date, 1),
+    ],
+    [reservation.date]
+  );
+
+  React.useEffect(() => {
+    setChargement(true);
+    const t = setTimeout(() => setChargement(false), 900);
+    return () => clearTimeout(t);
+  }, []);
+
+  const departs = useMemo(
+    () => genererDeparts(reservation.depart, reservation.destination, dateActive, reservation.passagers),
+    [reservation.depart, reservation.destination, dateActive, reservation.passagers]
+  );
+
+  const dispoCeJour = departs.some((d) => !d.complet);
+
+  return (
+    <div className="min-h-[100dvh] bg-mist">
+      <EntetePage
+        titre="Disponibilités"
+        sousTitre={`${reservation.depart} → ${reservation.destination}`}
+        onRetour={onRetour}
+      />
+
+      <div className="px-5 max-w-md mx-auto">
+        {/* Sélecteur de date */}
+        <div className="flex gap-2 mb-5">
+          {dates.map((d, i) => (
+            <button
+              key={d}
+              onClick={() => setDateActive(d)}
+              className={`flex-1 rounded-xl px-2 py-2.5 text-center transition border-2 ${
+                dateActive === d
+                  ? "bg-forest border-forest text-paper"
+                  : "bg-white border-forest/12 text-ink/70"
+              }`}
+            >
+              <span className="block text-[10.5px] uppercase tracking-wide opacity-70">
+                {i === 0 ? "Veille" : i === 1 ? "Souhaitée" : "Lendemain"}
+              </span>
+              <span className="block text-[13px] font-bold capitalize mt-0.5">
+                {formatDateCourt(d)}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {chargement ? (
+          <div className="flex flex-col items-center justify-center py-16 text-forest/50">
+            <SearchCheck size={28} className="animate-pulse mb-3" />
+            <p className="text-[14px]">Recherche des véhicules disponibles…</p>
+          </div>
+        ) : (
+          <div className="space-y-3 pb-10">
+            {!dispoCeJour && (
+              <div className="bg-rust/10 border-2 border-rust/20 rounded-xl p-4 mb-1">
+                <p className="text-[13.5px] text-rust font-semibold">
+                  Aucun véhicule avec assez de places ce jour-là.
+                </p>
+                <p className="text-[12.5px] text-ink/50 mt-0.5">
+                  Essayez la veille ou le lendemain via les onglets ci-dessus.
+                </p>
+              </div>
+            )}
+
+            {departs.map((d) => (
+              <div
+                key={d.id}
+                className={`bg-white rounded-2xl p-4 border-2 ${
+                  d.complet ? "border-forest/8 opacity-50" : "border-forest/10"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="h-8 w-8 rounded-lg flex items-center justify-center text-white text-[11px] font-bold shrink-0"
+                      style={{ backgroundColor: d.couleur }}
+                    >
+                      {d.compagnie.slice(0, 2).toUpperCase()}
+                    </span>
+                    <span className="font-semibold text-[14px] text-ink">{d.compagnie}</span>
+                  </span>
+                  <span className="flex items-center gap-1 text-[13px] font-bold text-ink/70">
+                    <Clock size={13} />
+                    {d.heure}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-[12.5px] text-ink/50">
+                    <Armchair size={14} />
+                    {d.complet
+                      ? "Places insuffisantes"
+                      : `${d.placesRestantes} place(s) restante(s)`}
+                  </span>
+                  <span className="font-display font-bold text-[15px] text-forest">
+                    {formatFCFA(d.prix * reservation.passagers)}
+                  </span>
+                </div>
+
+                <button
+                  disabled={d.complet}
+                  onClick={() => onChoisir({ ...reservation, date: dateActive, trajet: d })}
+                  className="w-full mt-3 bg-forest disabled:bg-forest/15 disabled:text-ink/30 text-paper text-[13.5px] font-semibold rounded-lg py-2.5 transition active:scale-[0.98]"
+                >
+                  {d.complet ? "Complet" : "Choisir ce départ"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Client — Paiement                                            */
+/* ------------------------------------------------------------------ */
+
+function EcranPaiement({ reservation, onRetour, onPaye }) {
+  const [operateur, setOperateur] = useState(null);
+  const [traitement, setTraitement] = useState(false);
+  const montant = reservation.trajet.prix * reservation.passagers;
+
+  function payer() {
+    setTraitement(true);
+    setTimeout(() => onPaye(montant), 1400);
+  }
+
+  return (
+    <div className="min-h-[100dvh] bg-mist">
+      <EntetePage titre="Paiement" sousTitre="Étape 3 sur 3 — Confirmez votre trajet" onRetour={onRetour} />
+
+      <div className="px-5 pb-10 max-w-md mx-auto space-y-5">
+        <div className="bg-forest rounded-2xl p-5 text-paper">
+          <LigneTrajet depart={reservation.depart} arrivee={reservation.destination} detectee />
+          <div className="flex items-center justify-between mt-4 pt-4 border-t border-paper/15 text-[13px]">
+            <span
+              className="h-7 w-7 rounded-md flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+              style={{ backgroundColor: reservation.trajet.couleur }}
+            >
+              {reservation.trajet.compagnie.slice(0, 2).toUpperCase()}
+            </span>
+            <span className="text-paper/70 flex-1 ml-2">
+              {reservation.trajet.compagnie} · {reservation.trajet.heure} · {formatDateCourt(reservation.date)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between mt-2 text-[13.5px]">
+            <span className="text-paper/60">{reservation.passagers} passager(s)</span>
+            <span className="font-display font-bold text-gold text-[17px]">{formatFCFA(montant)}</span>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.14em] text-forest/60 font-semibold mb-2.5">
+            Choisir un moyen de paiement
+          </p>
+          <div className="space-y-2.5">
+            {[
+              { id: "airtel", nom: "Airtel Money", couleur: "#E60000", initiale: "A" },
+              { id: "moov", nom: "Moov Money", couleur: "#F47B20", initiale: "M" },
+            ].map((op) => (
+              <button
+                key={op.id}
+                onClick={() => setOperateur(op.id)}
+                className={`w-full flex items-center gap-3.5 rounded-xl border-2 px-4 py-3.5 transition ${
+                  operateur === op.id ? "border-forest bg-forest/[0.04]" : "border-forest/12 bg-white"
+                }`}
+              >
+                <span
+                  className="h-10 w-10 rounded-lg flex items-center justify-center text-white font-bold text-[15px] shrink-0"
+                  style={{ backgroundColor: op.couleur }}
+                >
+                  {op.initiale}
+                </span>
+                <span className="flex-1 text-left font-semibold text-[15px] text-ink">{op.nom}</span>
+                <span
+                  className={`h-5 w-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                    operateur === op.id ? "border-forest bg-forest" : "border-forest/20"
+                  }`}
+                >
+                  {operateur === op.id && <span className="h-2 w-2 rounded-full bg-gold" />}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {operateur && (
+          <Champ icone={Smartphone} label={`Numéro ${operateur === "airtel" ? "Airtel Money" : "Moov Money"}`}>
+            <input className={inputCls} placeholder="Numéro à débiter" inputMode="tel" defaultValue={reservation.telephone} />
+          </Champ>
+        )}
+
+        <button
+          disabled={!operateur || traitement}
+          onClick={payer}
+          className="w-full bg-gold disabled:bg-gold/40 text-forest font-display font-bold rounded-xl py-4 flex items-center justify-center gap-2 transition active:scale-[0.98]"
+        >
+          {traitement ? "Confirmation en cours…" : `Payer ${formatFCFA(montant)}`}
+        </button>
+        <p className="text-center text-[11.5px] text-ink/40">
+          Une demande de confirmation sera envoyée sur votre téléphone.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Client — Billet numérique                                    */
+/* ------------------------------------------------------------------ */
+
+function BilletNumerique({ billet, onAccueil }) {
+  return (
+    <div className="min-h-[100dvh] bg-mist flex flex-col">
+      <div className="px-5 pt-6 pb-2 max-w-md mx-auto w-full flex items-center gap-3">
+        <span className="h-9 w-9 rounded-full bg-gold flex items-center justify-center">
+          <CheckCircle2 size={18} className="text-forest" />
+        </span>
+        <div>
+          <h1 className="font-display font-bold text-[18px] text-ink leading-tight">Billet confirmé</h1>
+          <p className="text-[12.5px] text-ink/45">Disponible hors-ligne dans l'application</p>
+        </div>
+      </div>
+
+      <div className="px-5 pt-6 pb-10 max-w-md mx-auto w-full">
+        <div className="bg-white rounded-[22px] overflow-hidden shadow-[0_20px_40px_-16px_rgba(14,59,46,0.3)] border border-forest/10">
+          <div className="bg-forest text-paper px-6 pt-5 pb-7">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Bus size={16} className="text-gold" />
+                <span className="font-display text-[13px] tracking-[0.18em] uppercase font-semibold text-gold">
+                  Easy Transport
+                </span>
+              </span>
+              <span className="text-[11px] font-mono tracking-wider text-paper/50">BILLET</span>
+            </div>
+            <div className="mt-5">
+              <LigneTrajet depart={billet.depart} arrivee={billet.destination} detectee />
+            </div>
+          </div>
+
+          {/* Bord perforé */}
+          <div className="relative h-0">
+            <span className="absolute -left-3 -top-3 h-6 w-6 rounded-full bg-mist" />
+            <span className="absolute -right-3 -top-3 h-6 w-6 rounded-full bg-mist" />
+            <div className="border-t-2 border-dashed border-forest/20 mx-6" />
+          </div>
+
+          <div className="px-6 py-5 space-y-3.5">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold mb-0.5">Passager</p>
+                <p className="text-[14.5px] font-bold text-ink truncate">{billet.nom}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold mb-0.5">Téléphone</p>
+                <p className="text-[14.5px] font-bold text-ink">{billet.telephone}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold mb-0.5">Date & heure</p>
+                <p className="text-[14.5px] font-bold text-ink">{billet.date} · {billet.trajet.heure}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold mb-0.5">Passagers</p>
+                <p className="text-[14.5px] font-bold text-ink">{billet.passagers}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold mb-0.5">Compagnie</p>
+                <p className="text-[14.5px] font-bold text-ink">{billet.trajet.compagnie}</p>
+              </div>
+            </div>
+
+            <div className="pt-3.5 border-t border-forest/10 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold mb-0.5">
+                  Code de réservation
+                </p>
+                <p className="font-mono font-bold text-[19px] text-forest tracking-[0.08em]">{billet.code}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] uppercase tracking-wider text-ink/40 font-semibold mb-0.5">Montant payé</p>
+                <p className="font-display font-bold text-[16px] text-ink">{formatFCFA(billet.montant)}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p className="text-center text-[12px] text-ink/40 mt-4 px-4 leading-relaxed">
+          Présentez ce code de réservation à l'embarquement. Ce billet reste accessible même sans connexion.
+        </p>
+
+        <button
+          onClick={onAccueil}
+          className="w-full mt-6 bg-forest text-paper font-display font-bold rounded-xl py-3.5 transition active:scale-[0.98]"
+        >
+          Retour à l'accueil
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Admin — Connexion                                            */
+/* ------------------------------------------------------------------ */
+
+function ConnexionAdmin({ onRetour, onConnecte }) {
+  const [utilisateur, setUtilisateur] = useState("");
+  const [motDePasse, setMotDePasse] = useState("");
+  const [erreur, setErreur] = useState(false);
+
+  function connecter() {
+    if (utilisateur.trim() && motDePasse.trim()) {
+      setErreur(false);
+      onConnecte();
+    } else {
+      setErreur(true);
+    }
+  }
+
+  return (
+    <div className="min-h-[100dvh] bg-forest flex flex-col">
+      <div className="px-5 pt-6">
+        <button
+          onClick={onRetour}
+          className="h-9 w-9 rounded-full bg-paper/10 flex items-center justify-center active:scale-90 transition"
+        >
+          <ArrowLeft size={16} className="text-paper" strokeWidth={2.5} />
+        </button>
+      </div>
+
+      <div className="flex-1 flex flex-col justify-center px-6 max-w-md mx-auto w-full">
+        <div className="h-12 w-12 rounded-2xl bg-gold flex items-center justify-center mb-5">
+          <Lock size={22} className="text-forest" strokeWidth={2.5} />
+        </div>
+        <h1 className="font-display font-bold text-[24px] text-paper mb-1.5">Espace transporteur</h1>
+        <p className="text-paper/55 text-[14px] mb-8">Connectez-vous pour gérer vos trajets et départs.</p>
+
+        <div className="space-y-3.5">
+          <input
+            className="w-full rounded-xl bg-paper/8 border-2 border-paper/15 px-4 py-3.5 text-[15px] text-paper placeholder:text-paper/35 outline-none focus:border-gold transition"
+            placeholder="Identifiant"
+            value={utilisateur}
+            onChange={(e) => setUtilisateur(e.target.value)}
+          />
+          <input
+            type="password"
+            className="w-full rounded-xl bg-paper/8 border-2 border-paper/15 px-4 py-3.5 text-[15px] text-paper placeholder:text-paper/35 outline-none focus:border-gold transition"
+            placeholder="Mot de passe"
+            value={motDePasse}
+            onChange={(e) => setMotDePasse(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && connecter()}
+          />
+          {erreur && <p className="text-[13px] text-rust">Renseignez identifiant et mot de passe.</p>}
+          <button
+            onClick={connecter}
+            className="w-full bg-gold text-forest font-display font-bold rounded-xl py-3.5 mt-2 transition active:scale-[0.98]"
+          >
+            Se connecter
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Écran Admin — Tableau de bord                                      */
+/* ------------------------------------------------------------------ */
+
+function TableauBordAdmin({ reservations, onDeconnexion }) {
+  const [onglet, setOnglet] = useState("vue");
+  const [recherche, setRecherche] = useState("");
+
+  const chiffreAffaires = reservations.reduce((s, r) => s + r.montant, 0);
+  const totalPassagers = reservations.reduce((s, r) => s + r.passagers, 0);
+
+  const trajets = useMemo(() => {
+    const map = {};
+    reservations.forEach((r) => {
+      const cle = `${r.depart} → ${r.destination}`;
+      map[cle] = (map[cle] || 0) + 1;
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [reservations]);
+
+  const resultatsRecherche = reservations.filter((r) => {
+    const q = recherche.trim().toLowerCase();
+    if (!q) return false;
+    return r.nom.toLowerCase().includes(q) || r.code.toLowerCase().includes(q);
+  });
+
+  const onglets = [
+    { id: "vue", label: "Vue d'ensemble", icone: LayoutDashboard },
+    { id: "trajets", label: "Trajets", icone: Bus },
+    { id: "checkin", label: "Embarquement", icone: Search },
+  ];
+
+  return (
+    <div className="min-h-[100dvh] bg-mist">
+      <div className="bg-forest text-paper px-5 pt-6 pb-5">
+        <div className="flex items-center justify-between max-w-md mx-auto">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-paper/45 font-semibold">Tableau de bord</p>
+            <h1 className="font-display font-bold text-[20px]">Easy Transport</h1>
+          </div>
+          <button
+            onClick={onDeconnexion}
+            className="text-[12.5px] text-paper/60 border border-paper/20 rounded-lg px-3 py-1.5 active:bg-paper/10 transition"
+          >
+            Déconnexion
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-md mx-auto px-5 -mt-3">
+        <div className="flex bg-white rounded-xl border-2 border-forest/10 p-1">
+          {onglets.map((o) => (
+            <button
+              key={o.id}
+              onClick={() => setOnglet(o.id)}
+              className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg text-[11px] font-semibold transition ${
+                onglet === o.id ? "bg-forest text-paper" : "text-forest/50"
+              }`}
+            >
+              <o.icone size={15} />
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-md mx-auto px-5 py-5">
+        {onglet === "vue" && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white rounded-2xl p-4 border-2 border-forest/10">
+                <TrendingUp size={16} className="text-gold mb-2" />
+                <p className="font-display font-bold text-[20px] text-ink leading-none">{formatFCFA(chiffreAffaires)}</p>
+                <p className="text-[11.5px] text-ink/45 mt-1">Chiffre d'affaires</p>
+              </div>
+              <div className="bg-white rounded-2xl p-4 border-2 border-forest/10">
+                <Ticket size={16} className="text-forest mb-2" />
+                <p className="font-display font-bold text-[20px] text-ink leading-none">{reservations.length}</p>
+                <p className="text-[11.5px] text-ink/45 mt-1">Réservations</p>
+              </div>
+            </div>
+            <div className="bg-white rounded-2xl p-4 border-2 border-forest/10">
+              <div className="flex items-center gap-2 mb-1">
+                <Users size={15} className="text-forest" />
+                <p className="text-[13px] font-semibold text-ink">{totalPassagers} passagers transportés</p>
+              </div>
+              <p className="text-[12px] text-ink/45">Sur {trajets.length} trajet(s) distinct(s)</p>
+            </div>
+
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.14em] text-forest/60 font-semibold mb-2.5">
+                Dernières réservations
+              </p>
+              <div className="space-y-2">
+                {reservations.length === 0 && (
+                  <p className="text-[13.5px] text-ink/40 bg-white rounded-xl p-4 border-2 border-forest/10">
+                    Aucune réservation pour le moment.
+                  </p>
+                )}
+                {[...reservations].reverse().slice(0, 6).map((r) => (
+                  <div key={r.code} className="bg-white rounded-xl p-3.5 border-2 border-forest/10 flex items-center justify-between">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-[13.5px] text-ink truncate">{r.nom}</p>
+                      <p className="text-[12px] text-ink/45 truncate">{r.depart} → {r.destination}</p>
+                    </div>
+                    <span className="font-mono text-[11.5px] font-bold text-forest shrink-0 ml-2">{r.code}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {onglet === "trajets" && (
+          <div className="space-y-2.5">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-forest/60 font-semibold mb-1">
+              Trajets & départs
+            </p>
+            {trajets.length === 0 && (
+              <p className="text-[13.5px] text-ink/40 bg-white rounded-xl p-4 border-2 border-forest/10">
+                Aucun trajet enregistré.
+              </p>
+            )}
+            {trajets.map(([nom, count]) => (
+              <div key={nom} className="bg-white rounded-xl p-4 border-2 border-forest/10 flex items-center justify-between">
+                <span className="flex items-center gap-2.5 font-semibold text-[14px] text-ink">
+                  <Bus size={15} className="text-forest shrink-0" />
+                  {nom}
+                </span>
+                <span className="text-[12.5px] text-paper bg-forest rounded-full px-2.5 py-1 font-semibold">
+                  {count} rés.
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {onglet === "checkin" && (
+          <div className="space-y-4">
+            <div className="relative">
+              <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-forest/40" />
+              <input
+                className="w-full rounded-xl border-2 border-forest/15 bg-white pl-10 pr-4 py-3 text-[14.5px] outline-none focus:border-gold transition"
+                placeholder="Nom du passager ou code (ET-XXXXXX)"
+                value={recherche}
+                onChange={(e) => setRecherche(e.target.value)}
+              />
+            </div>
+
+            {recherche.trim() && resultatsRecherche.length === 0 && (
+              <p className="text-[13.5px] text-ink/40 bg-white rounded-xl p-4 border-2 border-forest/10">
+                Aucune réservation correspondante.
+              </p>
+            )}
+
+            <div className="space-y-2.5">
+              {resultatsRecherche.map((r) => (
+                <div key={r.code} className="bg-white rounded-2xl p-4 border-2 border-forest/10">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <p className="font-display font-bold text-[15px] text-ink">{r.nom}</p>
+                    <span className="font-mono text-[12px] font-bold text-forest">{r.code}</span>
+                  </div>
+                  <p className="text-[12.5px] text-ink/50 mb-3">
+                    {r.depart} → {r.destination} · {r.date} · {r.passagers} passager(s)
+                  </p>
+                  <button className="w-full bg-forest text-paper text-[13.5px] font-semibold rounded-lg py-2.5 flex items-center justify-center gap-1.5 active:scale-[0.98] transition">
+                    <CheckCircle2 size={15} />
+                    Valider l'embarquement
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* App principale — machine à états                                   */
+/* ------------------------------------------------------------------ */
+
+export default function App() {
+  const [ecran, setEcran] = useState("accueil");
+  const [enCours, setEnCours] = useState(null); // brouillon de réservation
+  const [dernierBillet, setDernierBillet] = useState(null);
+  const [reservations, setReservations] = useState([]);
+
+  function retourAccueil() {
+    setEcran("accueil");
+    setEnCours(null);
+  }
+
+  return (
+    <div className="font-sans">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@600;700&display=swap');
+        .font-display { font-family: 'Space Grotesk', sans-serif; }
+        .font-sans { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'IBM Plex Mono', monospace; }
+        .text-forest { color: #0E3B2E; }
+        .bg-forest { background-color: #0E3B2E; }
+        .border-forest { border-color: #0E3B2E; }
+        .text-gold { color: #E8A33D; }
+        .bg-gold { background-color: #E8A33D; }
+        .border-gold { border-color: #E8A33D; }
+        .text-rust { color: #B54834; }
+        .bg-rust { background-color: #B54834; }
+        .text-paper { color: #F1ECDF; }
+        .bg-paper { background-color: #F1ECDF; }
+        .border-paper { border-color: #F1ECDF; }
+        .bg-mist { background-color: #F6F3E9; }
+        .text-ink { color: #16231D; }
+        .ring-gold\\/15 { --tw-ring-color: rgba(232,163,61,0.15); }
+      `}</style>
+
+      {ecran === "accueil" && (
+        <EcranAccueil
+          onChoix={(role) => setEcran(role === "client" ? "formulaire" : "admin-login")}
+        />
+      )}
+
+      {ecran === "formulaire" && (
+        <FormulaireReservation
+          onRetour={retourAccueil}
+          onSuivant={(donnees) => {
+            setEnCours(donnees);
+            setEcran("resultats");
+          }}
+        />
+      )}
+
+      {ecran === "resultats" && enCours && (
+        <EcranResultats
+          reservation={enCours}
+          onRetour={() => setEcran("formulaire")}
+          onChoisir={(donnees) => {
+            setEnCours(donnees);
+            setEcran("paiement");
+          }}
+        />
+      )}
+
+      {ecran === "paiement" && enCours && enCours.trajet && (
+        <EcranPaiement
+          reservation={enCours}
+          onRetour={() => setEcran("formulaire")}
+          onPaye={(montant) => {
+            const billet = { ...enCours, montant, code: genererCodeReservation() };
+            setDernierBillet(billet);
+            setReservations((prev) => [...prev, billet]);
+            setEcran("billet");
+          }}
+        />
+      )}
+
+      {ecran === "billet" && dernierBillet && (
+        <BilletNumerique billet={dernierBillet} onAccueil={retourAccueil} />
+      )}
+
+      {ecran === "admin-login" && (
+        <ConnexionAdmin onRetour={retourAccueil} onConnecte={() => setEcran("admin-dashboard")} />
+      )}
+
+      {ecran === "admin-dashboard" && (
+        <TableauBordAdmin reservations={reservations} onDeconnexion={retourAccueil} />
+      )}
+    </div>
+  );
+}
